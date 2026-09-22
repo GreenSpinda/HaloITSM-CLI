@@ -1,6 +1,6 @@
 # HaloITSM CLI
 
-A custom lightweight interactive command-line for interacting with the [HaloITSM](https://www.usehalo.com/) REST API.
+A custom lightweight command-line for interacting with the [HaloITSM](https://www.usehalo.com/) REST API.
 
 Version: **v0.1.2.260922**
 

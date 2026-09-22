@@ -21,7 +21,7 @@ class ShellInstance:
     """ init and command functions """
     # Initalization function
     def __init__(self) -> None:
-        subprocess.run('title Halo Shell', shell=True)
+        subprocess.run('title Halo CLI', shell=True)
         self.is_connected: bool = False
         self.custom_commands: list = ["raw", "all", "new", "refresh", "keys", "show"]
         self.boot()
@@ -43,7 +43,7 @@ class ShellInstance:
         self.COMMAND_TAG: str = "not-connected"
         self.SHELL_TITLE: str = f'HaloAPI Shell {self.VERSION}'
 
-        self.MESSAGE_WELCOME: str = f"\nVersion: {self.VERSION}\nWelcome to the HaloITSM API Shell.\n"
+        self.MESSAGE_WELCOME: str = f"\nVersion: {self.VERSION}\nWelcome to the HaloITSM CLI.\n"
         self.MESSAGE_WHOHOST: str = f"\nThe current target host is:   "
         self.MESSAGE_WHOTOKEN: str = f"\nTime left on stored token:   "
         self.MESSAGE_GOTTOKEN: str = f"\nA new access token was successfully retrieved.\n"

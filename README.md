@@ -3,6 +3,7 @@
 A custom lightweight command-line for interacting with the [HaloITSM](https://www.usehalo.com/) REST API.
 
 Current Version: **v0.1.3.261110**
+
 Previous Version: **v0.1.2.260922**
 
 ## Overview

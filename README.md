@@ -2,7 +2,8 @@
 
 A custom lightweight command-line for interacting with the [HaloITSM](https://www.usehalo.com/) REST API.
 
-Version: **v0.1.2.260922**
+Current Version: **v0.1.3.261110**
+Previous Version: **v0.1.2.260922**
 
 ## Overview
 
@@ -51,3 +52,10 @@ By using this CLI you acknowledge and accept that:
 ## Configuration 
 
 The default configuration file will not contain 'client_id' and 'client_secret' options. These have been removed to inspire secure secret storage. To enable token retrieval and handling a user can add the options under the [configuration] section.
+
+## How to utilize 
+
+1. Download Python 3.1+
+2. Run 'python3 main.py'
+3. Fill in valid details to the config.ini file and save it.
+4. Run 'help' in the command line for usage assistance. 

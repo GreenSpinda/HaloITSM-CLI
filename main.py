@@ -1,10 +1,11 @@
-## TESTING UPTO ATTACHMENT IN SWAGGER
-
 import os
+import re
+import ast
 import sys
 import csv
 import time
 import json
+import shutil
 import shlex
 import datetime
 import requests
@@ -14,21 +15,19 @@ from configparser import ConfigParser
 from requests import Response
 from datetime import datetime, timedelta
 
-## DEV NOTES
-# * Filter data not working. query /tickettype returning 140 for expected 412. 
 
 class ShellInstance:
     """ init and command functions """
     # Initalization function
     def __init__(self) -> None:
         subprocess.run('title Halo CLI', shell=True)
-        self.is_connected: bool = False
-        self.custom_commands: list = ["raw", "all", "new", "refresh", "keys", "show"]
         self.boot()
 
     # Function for boot control
     def boot(self) -> None:
+        self.load_data()
         self.load_strings()
+        os.chdir(self.INSTALL_LOCATION)
         self.load_config()
         print(f'{self.MESSAGE_WELCOME}')
         if not self.check_access():
@@ -36,14 +35,28 @@ class ShellInstance:
 
         self.main()
 
+    # NEW - Function to load reference data.
+    def load_data(self):
+        # Dynamic
+        self.is_connected: bool = False
+        self.is_configured: bool = False
+        self.custom_commands: list = ["raw", "all", "new", "refresh", "keys", "show", "basic"]
+        self.config_commands: list = ["list", "open", "change", "update", "help", "dir"]
+        self.config_file: str = "config.ini"    # Can be updated through update_config function to target other files. 
+
+        # Static
+        self.CONFIG_SECTIONS: list = ['configuration', 'session']
+        self.CONFIG_OPTIONS: list = ['host', 'client_id', 'client_secret', 'token', 'expire']
+
     # Function to load all lengthy strings in one place for easy editing 
     def load_strings(self) -> None:
         self.INSTALL_LOCATION: str = os.path.dirname(__file__)
-        self.VERSION: str = "v0.1.2.260922" # previous "v0.1.260911"
+        self.VERSION: str = "v0.1.3.261110" # previous "v0.1.2.260922"
         self.COMMAND_TAG: str = "not-connected"
-        self.SHELL_TITLE: str = f'HaloAPI Shell {self.VERSION}'
+        #self.SHELL_TITLE: str = f'HaloCLI {self.VERSION}'
+        self.CONFIG_FILENAME = 'config.ini' # Static name for default config replacement.
 
-        self.MESSAGE_WELCOME: str = f"\nVersion: {self.VERSION}\nWelcome to the HaloITSM CLI.\n"
+        self.MESSAGE_WELCOME: str = f"\nVersion: {self.VERSION}\nWelcome to the HaloITSM Command-Line Interface.\n"
         self.MESSAGE_WHOHOST: str = f"\nThe current target host is:   "
         self.MESSAGE_WHOTOKEN: str = f"\nTime left on stored token:   "
         self.MESSAGE_GOTTOKEN: str = f"\nA new access token was successfully retrieved.\n"
@@ -55,8 +68,13 @@ class ShellInstance:
         self.MESSAGE_SUCCESSDEL: str = "\nThe following record(s) IDs have been deleted from the endpoint: "
         self.MESSAGE_NODATA: str = f"records found in the endpoint with the specified conditions.\n" # This is a error 27/08/2026
         self.MESSAGE_X: str = f""
-        
-        self.CONFIG_FILE: str = self.INSTALL_LOCATION + "\\" + "config.ini"
+
+        self.MESSAGE_CFG_NEWNAME: str = "Name for new configuration: "
+        self.MESSAGE_CFG_TARGET: str = "Name of configuration> "
+        self.MESSAGE_CFG_WARN: str = "This will update your configuration settings to use "
+        self.MESSAGE_CFG_CONFIRM: str = "Type 'YES' to action> "
+
+        self.CONFIG_PATH: str = self.INSTALL_LOCATION + "\\config\\"
         self.CONFIG_DEFAULT_DATA: str = """[configuration]
 host = 
 
@@ -64,10 +82,12 @@ host =
 token = 
 expire = 
 """
-        self.CONFIG_SECTIONS: list = ['configuration', 'session']
-        self.CONFIG_OPTIONS: list = ['host', 'client_id', 'client_secret', 'token', 'expire']
 
-
+        self.ERROR_INVALIDFN: str = "Please try again with a valid filename." 
+        self.ERROR_UNKCFG: str = "Unable to find any files with this name, you can use the 'config list' command to check available files."
+        self.ERROR_MULTICFG: str = "More than one configuration with that name."
+        self.ERROR_INVALIDCFG: str = "\nerror: Unable to connect to host, please check the configuration file.\n"
+        self.ERROR_NOJSON: str = "\nerror: JSON content was not returned, there may be a problem with the endpoint.\n"
         self.ERROR_NOTOKEN: str = "error: No Access Token found in configuration.\n"
         self.ERROR_NOCICS: str = "\nerror: No client ID or client secret found.\n"
         self.ERROR_NOHOST: str = "\nerror: No host specified in configuration.\n"
@@ -77,12 +97,14 @@ expire =
         self.ERROR_INVDELEP: str = "\nerror: You must specify a record ID to delete. Usage: delete /endpoint/id\n"
         self.ERROR_NOQUOTES: str = "\nerror: No closing quotation in parameter.\n"
         self.ERROR_NOPOSTDATA: str = "\nerror: You have not specified any data to POST.\n"
+        self.ERROR_NOPOSTEP: str = "\nerror: You have not specified any endpoint.\n"
         self.ERROR_INVALIDEP: str = "\nerror: Could not contact the endpoint, head to https://www.usehalo.com/swagger for endpoint list."
         self.ERROR_NOEP: str = "\nerror: You did not specify a /endpoint, head to https://www.usehalo.com/swagger for endpoint list.\n"
         self.ERROR_UNAUTH: str = "error: 401 Unauthorized. Please double check you details in the config file."
         self.ERROR_UNCONNECTED: str = "\nerror: You are not connected to an instance. Please type 'help' for commands.\n"
-        self.ERROR_CONFIG: str = "Fatal: Corrupted config file, please enter details and rerun program."
-        self.ERROR_USAGE:str = """\nExample usage: get /endpoint key=value key2=value2
+        self.ERROR_CFGLOAD: str = "Fatal: Corrupted config file, please retype your configuration details."
+
+        self.ERROR_USAGE: str = """\nExample usage: get /endpoint key=value key2=value2
          
 
 The following commands are available:
@@ -93,6 +115,7 @@ basic:
 clear          - Clear the current command log.
 who            - Shows the current host.          
 token          - Shows current access token details.
+config         - Allows in-app configuration management.
 exit           - Exit the program. 
 
 interaction:
@@ -100,6 +123,7 @@ connect        - Connect to the HaloAPI for interaction (requires token or clien
 get            - Send a GET request to a specified /endpoint.
 post           - Send a POST request to a specified /endpoint.
 delete         - Send a DELETE request to a specified /endpoint.\n"""
+
         self.ERROR_USAGE_EXT: str = """sub-commands:
 get /ep all    - Used with 'get' command to display all records in the table.
 get /ep keys   - Used with 'get' command to display table keys.
@@ -110,26 +134,43 @@ sub-processes:
 post csv="C:\\target_file.csv"      
                - Used to post and bulk upload to the HaloAPI\n"""
 
+        self.ERROR_USAGECONFIG: str = """\nExample usage: config list
+         
+
+The following commands are available:
+
+Commands in this context:
+config list    - Lists all configuration files in the config folder.
+config open    - Open the config file currently in use. 
+config update  - Updates the target config file to be used.
+config new     - Creates a new config file in the config directory.
+config dir     - Open the directory holding the config files.\n"""
+
+    # NEW - Function to create a configuration file within the config directory.
+    def create_config_file(self, config_file_name, notify_error=False) -> None:
+                path = (self.CONFIG_PATH + config_file_name)
+                if notify_error:
+                    print(self.ERROR_CFGLOAD)
+
+                os.makedirs('config', exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(self.CONFIG_DEFAULT_DATA)
+                    f.close
+    
+                subprocess.run(f'notepad {path}')
+
     # Function to create and/or Loads configuration file
     def load_config(self) -> None:
         # Creates a config file 
-        def create_config_file():
-            print(self.ERROR_CONFIG)
-            with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
-                f.write(self.CONFIG_DEFAULT_DATA)
-                f.close
-
-            subprocess.run(f'notepad {self.CONFIG_FILE}')
-
         self.config: ConfigParser = configparser.ConfigParser()
         
         try: 
-            with open(self.CONFIG_FILE, 'r', encoding='utf-8'):
+            with open(self.config_file_path(), 'r', encoding='utf-8'):
                 pass
         except FileNotFoundError:
-            create_config_file()
+            self.create_config_file(self.CONFIG_FILENAME, notify_error=True)
             
-        self.config.read(self.CONFIG_FILE)
+        self.config.read(self.config_file_path())
 
         try:
             self.host: str = self.config.get(self.CONFIG_SECTIONS[0], self.CONFIG_OPTIONS[0])
@@ -140,12 +181,18 @@ post csv="C:\\target_file.csv"
             pass
 
         except configparser.NoSectionError:
-            create_config_file()
-            exit()
+            if self.is_configured: 
+                self.config_file = self.CONFIG_FILENAME
+                return print("Invalid configuration, fallback executed.")
+            else:
+             return self.create_config_file(self.CONFIG_FILENAME, notify_error=True)
 
         except configparser.NoOptionError:
-            create_config_file()
-            exit()
+            if self.is_configured: 
+                self.config_file = self.CONFIG_FILENAME
+                return print("Invalid configuration, fallback executed.")
+            else:
+             return self.create_config_file(self.CONFIG_FILENAME, notify_error=True)
 
         ## Additional check to type change session_token
         if len(self.session_token) < 1:
@@ -153,14 +200,186 @@ post csv="C:\\target_file.csv"
 
         ## Additional catch to make clid and slsc optional
         try: 
-            self.client_id:str | None = self.config.get(self.CONFIG_SECTIONS[0], self.CONFIG_OPTIONS[1])
+            self.client_id: str | None = self.config.get(self.CONFIG_SECTIONS[0], self.CONFIG_OPTIONS[1])
             self.client_secret: str | None = self.config.get(self.CONFIG_SECTIONS[0], self.CONFIG_OPTIONS[2])
 
         except configparser.NoOptionError:
             self.client_id: str | None = None
             self.client_secret: str | None = None
 
-        ##
+        self.is_configured = True
+        #
+
+    # NEW - Parent function to route configuration commands through main.
+    def manage_config(self, commands) -> None:
+        try:
+            command: str = commands[0]
+        except IndexError:
+            print(self.ERROR_USAGECONFIG)
+            return
+        
+        match command:
+            case 'help':
+                print(self.ERROR_INVALIDCFG)
+
+            case 'open':
+                subprocess.run(f'notepad {self.config_file_path()}')
+                self.load_config()
+
+            case 'list':
+                self.print_v2(self.find_config())
+
+            case 'update' | 'change':
+                self.update_config()
+
+            case 'new':
+                self.new_config()
+
+            case 'dir':
+                print("\n", "Opening configuration path.","\n")
+                os.startfile(self.CONFIG_PATH)
+                
+
+        #self.load_config()
+
+        # NEW - Function to change config file read. [REQUIRES CLEAN AND BUILD OUT]
+    
+    # NEW - Function to update the targeted configuration to use. 
+    def update_config(self) -> None:
+        def filter_list(file_filter):
+            target_config_file = []
+
+            for f in self.find_config():
+                if file_filter in f.lower():
+                    target_config_file.append(f)
+
+            return target_config_file
+        
+        user_input = input("\n" + self.MESSAGE_CFG_TARGET)
+
+        config_file = filter_list(user_input)
+
+        if user_input in ['exit', 'quit', 'q', 'back']:
+            return 
+        
+        elif len(config_file) > 1: 
+            print(self.ERROR_MULTICFG)
+            self.print_v2(config_file, "Available configurations")
+            return self.update_config()
+        
+        elif len(config_file) < 1: 
+            print(self.ERROR_UNKCFG)
+            return
+
+        print(self.MESSAGE_CFG_WARN, config_file[0], ". Confirm?")
+        user_confirmation = input(self.MESSAGE_CFG_CONFIRM)
+        if user_confirmation in ['yes', 'y']:
+            self.disconnect()
+            self.config_file = config_file[0]
+            self.load_config()
+            print()
+            
+        else: 
+            print()
+            return
+
+        # Function create a new config file from create_config_file
+    
+    # NEW - Function to create a new configuration file in the config directory.
+    def new_config(self) -> None:
+        name_prompt: str = input("\n" + self.MESSAGE_CFG_NEWNAME)
+        if len(name_prompt) < 1:
+            return print(self.ERROR_INVALIDFN, "\n")
+        print()
+        self.create_config_file(f"config_{name_prompt}.ini")
+
+    # NEW - Function to return a list of 'config' files in CONFIG_PATH
+    def find_config(self) -> list:
+        config_list = []
+
+        file_list = os.listdir(self.CONFIG_PATH)
+
+        for f in file_list:
+            if 'config' in f:
+                    config_list.append(f)
+
+        return config_list
+
+        # NEW - Simple function to return configuration target full file path. 
+    
+    # NEW - Function to return path of target config file.
+    def config_file_path(self) -> str:
+        return self.CONFIG_PATH + self.config_file
+    
+    # NEW - Function to print py lists of data 
+    def print_v2(self, data_list: list, title: str = "List",
+               headers: list[str] | None = None,
+               row_ids: list[str] | None = None,
+               id_header: str = "#",
+               max_col_width: int = 40) -> None:
+
+        def clip(text: str, width: int) -> str:
+            return text if len(text) <= width else text[:width - 1] + "…"
+    
+        def fmt_row(cells: list[str]) -> str:
+            return "│ " + " │ ".join(clip(c, w).ljust(w) for c, w in zip(cells, widths)) + " │"
+    
+        def line(left: str, mid: str, right: str) -> str:
+            return left + mid.join("─" * (w + 2) for w in widths) + right
+        
+        if not data_list:
+            print(f"\n{title}\n(no data)\n")
+            return
+
+        # Normalise every row into a list of strings
+        first = data_list[0]
+        if isinstance(first, dict):
+            headers = headers or list(first.keys())
+            rows = [[str(item.get(h, "")) for h in headers] for item in data_list]
+        elif isinstance(first, (list, tuple)):
+            rows = [[str(c) for c in item] for item in data_list]
+        else:
+            rows = [[str(item)] for item in data_list]
+
+        # Make every row the same length
+        num_cols = max(len(r) for r in rows)
+        rows = [r + [""] * (num_cols - len(r)) for r in rows]
+
+        # Headers must match the column count exactly: trim extras, pad missing
+        headers = [str(h) for h in (headers or [])][:num_cols]
+        if not headers and num_cols == 1:
+            headers = ["File"]
+        headers += [f"Col {i + 1}" for i in range(len(headers), num_cols)]
+
+        # Only add the id column if row_ids were supplied
+        if row_ids is not None:
+            ids = [str(i) for i in row_ids]
+            if len(ids) != len(rows):
+                raise ValueError(f"row_ids has {len(ids)} items but data has {len(rows)} rows")
+            headers = [id_header] + headers
+            rows = [[i] + r for i, r in zip(ids, rows)]
+
+        # Column widths: widest cell, capped by max_col_width
+        widths = [
+            min(max(len(headers[c]), max(len(r[c]) for r in rows)), max_col_width)
+            for c in range(len(headers))
+        ]
+
+        # Shrink the widest column if the table exceeds the terminal width
+        term_width = shutil.get_terminal_size((100, 20)).columns
+        overhead = 3 * len(widths) + 1
+        while sum(widths) + overhead > term_width and max(widths) > 8:
+            widths[widths.index(max(widths))] -= 1
+
+        total = sum(widths) + overhead
+        print(f"\n{title.center(total)}")
+        print(line("┌", "┬", "┐"))
+        print(fmt_row(headers))
+        print(line("├", "┼", "┤"))
+        for r in rows:
+            print(fmt_row(r))
+        print(line("└", "┴", "┘"))
+        print(f"{len(rows)} item(s)\n")
 
     # Function to clear terminal within program
     def clear_function(self) -> None:
@@ -181,7 +400,7 @@ post csv="C:\\target_file.csv"
             return False 
 
     # Function for runner to print current targeted host to terminal
-    def who_token(self, commands) -> None:
+    def who_token(self, commands: list) -> None:
         if ("new" in commands or "refresh" in commands) and (self.client_id):
             self.get_token()
 
@@ -204,29 +423,39 @@ post csv="C:\\target_file.csv"
             print(self.ERROR_NOHOST)
             return None
 
-        
-        request: Response = requests.post(
-            url = f'https://{self.host}/auth/Token',
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json"
-                },
-            data = {
-                "grant_type": "client_credentials", # potietially handle other options
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "scope": "all"
-                }
-            )
-        
+        try:
+            request: Response = requests.post(
+                url = f'https://{self.host}/auth/Token',
+                headers = {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json"
+                    },
+                data = {
+                    "grant_type": "client_credentials", # potietially handle other options
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "scope": "all"
+                    }
+                )
+        except requests.exceptions.ConnectionError: 
+            print(self.ERROR_INVALIDCFG)
+
+        # New error catch v.261006
+        try:
+            data: dict = json.loads(request.text)
+        except json.decoder.JSONDecodeError:
+            print(self.ERROR_NOJSON)
+            return
+        #
+
         if request.status_code in [x for x in range(200, 300)]:
-            self.session_token: str = json.loads(request.text)['access_token']
-            self.refresh_token: str = json.loads(request.text)['refresh_token']
+            self.session_token: str = data['access_token']
+            self.refresh_token: str = data['refresh_token']
             self.session_expiry: datetime = datetime.now()
 
             self.config.set(self.CONFIG_SECTIONS[1], self.CONFIG_OPTIONS[3], f'{self.session_token}')
             self.config.set(self.CONFIG_SECTIONS[1], self.CONFIG_OPTIONS[4], f'{self.session_expiry}')
-            with open(self.CONFIG_FILE, 'w') as f:
+            with open(self.config_file_path(), 'w') as f:
                 self.config.write(f)
 
             self.COMMAND_TAG: str = self.host
@@ -260,7 +489,7 @@ post csv="C:\\target_file.csv"
             return False
 
     # Function to create cmd like loading bar for csv command bulk uploads
-    def build_loading_bar(self, total):
+    def build_loading_bar(self, total: int):
         current = 0
         start_time = time.monotonic()
 
@@ -300,8 +529,31 @@ post csv="C:\\target_file.csv"
 
         return update
 
+    # Function to parse raw POST data to ensure compatability 
+    def parse_raw_post(self, data: str):
+        strip_data: str = data.strip()
+        try:
+            return json.loads(strip_data)
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            return ast.literal_eval(strip_data)
+        except (ValueError, SyntaxError):
+            pass
+
+        normalized = strip_data
+        normalized = re.sub(r'\btrue\b', 'True', normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r'\bfalse\b', 'False', normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r'\bnull\b', 'None', normalized, flags=re.IGNORECASE)
+
+        try:
+            return ast.literal_eval(normalized)
+        except (ValueError, SyntaxError) as e:
+            raise ValueError(f"Could not parse as JSON or Python literal:\n{data}") from e
+
     # Function to run against strings with nested json elements
-    def parse_nested_json(self, value: str | dict | list) -> str | int | float | list | dict:
+    def parse_nested_json(self, value: str | dict | list):
                 if isinstance(value, str):
                     try:
                         return self.parse_nested_json(json.loads(value))
@@ -340,16 +592,20 @@ post csv="C:\\target_file.csv"
         endpoint: str = str()
         data_pack: dict = {}
         commands: list = []
-        split_command: list = shlex.split(command)
+        split_command: list = shlex.split(command)  # For direct json posting need to review here <-
         conditions: list = split_command[1:]
+        
+        
         for condition in conditions:
             if '/' in condition[0]:
                 endpoint: str = condition
             elif '=' in condition:
-                data_pack[condition.split('=')[0]] = condition.split('=')[1]
-            elif condition in self.custom_commands:
+                print(condition)
+                data_pack[condition.split('=', 1)[0]] = condition.split('=', 1)[1]
+                
+            elif condition in self.custom_commands or condition in self.config_commands:
                 commands.append(condition)
-            
+
         return (endpoint, data_pack, commands)
 
     """ request functions """
@@ -363,9 +619,21 @@ post csv="C:\\target_file.csv"
 
         return
 
+    # NEW - Function to disconnect ability to run requets. 
+    def disconnect(self) -> None:
+        if self.is_connected:
+            print(f"Disconnected from {self.host}.")
+            self.COMMAND_TAG: str = "not-connected"
+            self.is_connected: bool = False
+        else:
+            return #print("You are not connected.")
+
     # Function to GET data from specified HaloAPI endpoint 
     def get_endpoint(self, endpoint: str) -> list | None:
         def GET_Request(params: dict = {}):
+            # Inclusion filter parameters - 27/10/2026
+            params['includedisabled'] = True
+            #
             request: Response = requests.get(
                         url = f'https://{self.host}/api{endpoint}',
                         headers = {
@@ -377,7 +645,7 @@ post csv="C:\\target_file.csv"
 
         def unpack_data(request_text: str, endpoint_as_str: str) -> dict:
             try:             
-                data = json.loads(request_text)[endpoint_as_str]
+                data: dict = json.loads(request_text)[endpoint_as_str]
             except KeyError:
                 try:
                     data= json.loads(request_text)[self.find_endpoint_key_mapping(endpoint_as_str.lower())]
@@ -398,8 +666,6 @@ post csv="C:\\target_file.csv"
         endpoint_as_str: str = endpoint.lower().split('/')[1]
 
         request: Response = GET_Request()
-        #print(request.text)
-        #print(request.status_code)
 
         if request.status_code in [x for x in range(200, 300)]:
             try:
@@ -460,8 +726,12 @@ post csv="C:\\target_file.csv"
             return None
         
     # Function to POST data from specified HaloAPI endpoint
-    def post_endpoint(self, endpoint: str, user_conditions: dict) -> None:
+    def post_endpoint(self, endpoint: str, user_conditions: dict, commands: list) -> None:
         def POST_Request(payload: list = []) -> Response:
+            # some posts were erroring from no list for json array, added catch here 19/10/2026
+            if not isinstance(payload, list):
+                payload = [payload]
+
             request: Response = requests.post(
                                     url = f'https://{self.host}/api{endpoint}',
                                     headers = {
@@ -472,6 +742,30 @@ post csv="C:\\target_file.csv"
                                     )
             return request
 
+        if len(endpoint) < 1:
+            print(self.ERROR_NOPOSTEP)
+            return
+
+        # Attempt raw post mode 09-11-2026
+        if 'raw' in commands:
+            raw_post_data = input("Enter raw JSON to post:\n")
+            try:
+                raw_post = self.parse_raw_post(raw_post_data)
+                #raw_post: list = ast.literal_eval(raw_post_data)
+                r: Response = POST_Request(raw_post)
+                new_id: int = json.loads(r.text)['id']
+                print("\n", endpoint.capitalize(), self.MESSAGE_SUCCESSPOST, new_id, "\n")
+
+            except Exception as e:
+                print("You have submitted invalid JSON.")
+                print(e)
+
+            print()
+            return
+
+        if len(user_conditions) < 1:
+            print(self.ERROR_NOPOSTDATA)
+            return
         
         # CSV Bulk upload post function
         if 'csv' in user_conditions.keys():
@@ -487,24 +781,24 @@ post csv="C:\\target_file.csv"
                 if request.status_code not in [x for x in range(200, 300)]:
                     error_list.append(request.text)
                 loading_bar()
+            
             print("Bulk Upload Process Had been completed.")
             print(f"Skipped records: {error_list}")
             return
         #
+
         
-        if len(user_conditions) < 1:
-            print(self.ERROR_NOPOSTDATA)
-            return
+
 
         
         if isinstance(user_conditions, dict):
-            user_conditions = [user_conditions]
+            user_conditions_list: list = [user_conditions]
 
         
         #print("data_pack: ", user_conditions)
-        user_conditions = self.parse_nested_json(user_conditions)
+        user_conditions_list = self.parse_nested_json(user_conditions) # type: ignore
         
-        request = POST_Request(user_conditions)
+        request = POST_Request(user_conditions_list)
 
         if request.status_code in [x for x in range(200, 300)]:
             try:
@@ -542,8 +836,7 @@ post csv="C:\\target_file.csv"
                        url = f'https://{self.host}/api{endpoint}',
                        headers = {
                            "Authorization": f"Bearer {self.session_token}"
-                           },
-                       #json = [user_conditions]
+                           }
                        )
                 
 
@@ -569,7 +862,8 @@ post csv="C:\\target_file.csv"
         if not user_conditions: 
             return data
 
-        data_key_list: list = []   
+        data_key_list: list = []
+
         for record in data:  
             for key in record: 
                 if key not in data_key_list:    
@@ -597,6 +891,7 @@ post csv="C:\\target_file.csv"
     def find_endpoint_key_mapping(self, endpoint_str) -> str:
         ENDPOINT_KEY_MAP: dict = {
             "actions": "actions",
+            "asset": "assets",
             "site": "sites",
             "report": "reports",
             "client": "clients",
@@ -608,20 +903,38 @@ post csv="C:\\target_file.csv"
         return ENDPOINT_KEY_MAP[endpoint_str]
 
     # Function to print filter data to shell
-    def print_data(self, data, endpoint, user_conditions, commands) -> None:
-        def print_all():
-            if isinstance(data, dict):
-                print(f'\n --- {endpoint} Endpoint --- ')
-                for key, value in data.items():
-                    print(f"{key}: {value}")
-                print()
+    def print_req_data(self, data, endpoint, user_conditions, commands) -> None:
+        def print_basic(keys, values):
+            print(f'\n --- {endpoint} Endpoint --- ')
+            for key, value in zip(keys, values):
+                print(f"{key}: {value}")
+            print()
 
+        def print_all():
+            key_list = []
+            value_list = []
+           
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    key_list.append(key)
+                    value_list.append(value)
+
+                if 'basic' not in commands:
+                    self.print_v2(value_list, f"{endpoint} Endpoint", ["Value"], key_list, "Key")
+                else:
+                    print_basic(key_list, value_list)
+                    
             elif isinstance(data, list):
-                for data_pack in data:
-                    print(f'\n --- {endpoint} Endpoint --- ')
-                    for key, value in data_pack.items():
-                        print(f"{key}: {value}")
-                    print()
+                data_dict = data[0]
+
+                for key, value in data_dict.items():
+                    key_list.append(key)
+                    value_list.append(value)
+
+                if 'basic' not in commands:
+                    self.print_v2(value_list, f"{endpoint} Endpoint", ["Value"], key_list, "Key")
+                else: 
+                    print_basic(key_list, value_list)
 
         if data is None:
             return
@@ -636,30 +949,42 @@ post csv="C:\\target_file.csv"
             return
 
         if "keys" in commands:
-            print(f'\n --- {endpoint} Endpoint Keys --- ')
+            key_list = []
             for key in data[0]:
-                print(key)
-            print()
+                key_list.append(key)
+            self.print_v2(key_list, f"{endpoint} endpoint keys", ["Key"])
 
             return
 
-        if "all" in commands:
+        if "all" in commands or "list" in commands:
             print()
+            
+            id_list = []
+            name_list = []
             for data_pack in data:
                 try:
-                    print(f"ID: {str(data_pack['id'])} -> {data_pack['summary']}")
+                    data_set = (f"{str(data_pack['id'])}", f"{data_pack['summary']}")
                 except KeyError:
                     try:
-                        print(f"ID: {data_pack['id']} -> {data_pack['name']}")
+                       data_set = (f"{str(data_pack['id'])}", f"{data_pack['name']}")
                     except KeyError:
-                        print(f"ID: {data_pack['id']} -> {endpoint.split('/')[1]}")
-                print()
+                        data_set = (f"{str(data_pack['id'])}", f"{endpoint.split('/')[1]}")
+
+                id_list.append(data_set[0])
+                name_list.append(data_set[1])
+
+            self.print_v2(name_list, f"{endpoint} endpoint", ["Records"], id_list, "ID")
+
+            if 'print' in user_conditions:
+                print("print true")
+
+            print()
             return
         
         if len(user_conditions) < 1 and len(data) > 1 and len(endpoint.split('/')) < 3:          
             print(f"\nThere are {len(data)} total records in the {endpoint} endpoint.\n")
             return
-        
+
         print_all()
 
     """ file functions """
@@ -670,13 +995,14 @@ post csv="C:\\target_file.csv"
             target_location = file_string['csv']
             with open(target_location, 'r', newline='', encoding='utf-8-sig') as csv_data:
                 data_dict: list = list(csv.DictReader(csv_data))
+
                 print(f"This process will attempt to upload {len(data_dict)} records to the Halo Instance.")
                 user_input = input("TYPE 'COMMIT'> ")
                 if user_input.lower() in ['commit']:
-                    return self.parse_nested_json(data_dict)
+                    return self.parse_nested_json(data_dict) # type: ignore
                 else:
                     return []
-
+                
         except FileNotFoundError:
             print(self.ERROR_CSVNOTFOUND)
             return []
@@ -684,7 +1010,7 @@ post csv="C:\\target_file.csv"
         else:
             return
 
-    """ main function """
+    """ main function / loop """
     def main(self): 
         while True: 
             user_input = input(f'{self.COMMAND_TAG}> ')
@@ -718,12 +1044,16 @@ post csv="C:\\target_file.csv"
                     user_command = str()
                     self.connect()
 
+                elif user_command.lower() in ['disconnect']:
+                    user_command = str()
+                    self.disconnect()
+
                 elif user_command.lower() in ['get']:
                     user_command = str()
                     if self.is_connected is True:
                         data = self.get_endpoint(endpoint)
                         data = self.filter_data(data, user_conditions, commands) 
-                        self.print_data(data, endpoint, user_conditions, commands)
+                        self.print_req_data(data, endpoint, user_conditions, commands)
                     else:
                         print(self.ERROR_UNCONNECTED)
                         continue
@@ -731,7 +1061,7 @@ post csv="C:\\target_file.csv"
                 elif user_command.lower() in ['post']:
                     user_command = str()
                     if self.is_connected is True:
-                        self.post_endpoint(endpoint, user_conditions)
+                        self.post_endpoint(endpoint, user_conditions, commands)
                     else:
                         print(self.ERROR_UNCONNECTED)
                         continue
@@ -752,11 +1082,14 @@ post csv="C:\\target_file.csv"
                     else:
                         print(self.ERROR_USAGE)
 
+                elif user_command.lower() in ['config']:
+                    user_command = str()
+                    self.manage_config(commands)
+
                 elif user_command.lower() in ['test']:
-                    print(self.session_token)
-                    print(type(self.session_token))
-                    print(self.client_id)
-                    print(type(self.client_id))
+                    print(endpoint)
+                    print(user_conditions)
+                    print(commands)
 
                 elif user_command == str():
                     pass
